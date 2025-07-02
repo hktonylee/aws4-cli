@@ -6,7 +6,7 @@ const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 // CLI Help text
 const HELP_TEXT = `
-aws4-cli - A CLI utility to sign curl-like URLs using Amazon's AWS Signature Version 4
+aws4-cli - A CLI utility to sign URLs using Amazon's AWS Signature Version 4
 
 USAGE:
   aws4-cli [OPTIONS] <URL>
@@ -436,7 +436,8 @@ class AWS4CLI {
     const protocol = signedOptions.protocol || 'https:';
     const hostname = signedOptions.hostname || signedOptions.host;
     const path = signedOptions.path || '/';
-    const url = `${protocol}//${hostname}${path}`;
+    const sessionToken = this.options.sessionToken || '';
+    const url = `${protocol}//${hostname}${path}${sessionToken ? `&X-Amz-Security-Token=${sessionToken}` : ''}`;
 
     if (this.options.verbose && this.requestOptions.signQuery) {
       console.error('Generated presigned URL with query parameters:');
@@ -472,6 +473,11 @@ class AWS4CLI {
     // Add headers
     for (const [key, value] of Object.entries(signedOptions.headers || {})) {
       curlCmd += ` \\\n  -H "${key}: ${value}"`;
+    }
+
+    // Add session token if present
+    if (this.options.sessionToken) {
+      curlCmd += ` \\\n  -H "x-amz-security-token: ${this.options.sessionToken}"`;
     }
 
     // Add body if present

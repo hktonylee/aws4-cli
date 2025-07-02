@@ -1,6 +1,6 @@
 const aws4 = require('aws4');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-const { ArgumentParser, AWS4CLI, DEFAULT_OPTIONS } = require('../index.js');
+const { ArgumentParser, AWS4CLI, DEFAULT_OPTIONS } = require('../src/index.js');
 
 // Mock the AWS dependencies
 jest.mock('aws4');
@@ -17,14 +17,14 @@ process.exit = jest.fn();
 describe('AWS4 CLI', () => {
   beforeAll(() => {
     // Prevent the main function from running during require
-    process.argv = ['node', 'index.js'];
+    process.argv = ['node', 'src/index.js'];
     
     // Mock console methods to avoid noisy test output
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
     
     // Require the module after setting up mocks
-    const indexModule = require('../index.js');
+    // const indexModule = require('src/index.js');
   });
 
   beforeEach(() => {

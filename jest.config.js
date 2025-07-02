@@ -9,4 +9,4 @@ module.exports = {
   ],
   testTimeout: 10000, // 10 seconds timeout for integration tests
   verbose: true
-}; 
+};

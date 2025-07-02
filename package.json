@@ -4,7 +4,7 @@
   "description": "A small CLI utility to sign curl-like URL using Amazon's AWS Signature Version 4",
   "main": "index.js",
   "bin": {
-    "aws4-cli": "./index.js"
+    "aws4-cli": "./src/index.js"
   },
   "scripts": {
     "test": "jest",
