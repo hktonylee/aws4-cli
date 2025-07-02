@@ -7,12 +7,17 @@
     "aws4-cli": "./index.js"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
   },
   "author": "Tony Lee <iamtonylee@gmail.com>",
   "license": "MIT",
   "dependencies": {
     "aws4": "^1.13.2",
     "@aws-sdk/credential-providers": "^3.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }

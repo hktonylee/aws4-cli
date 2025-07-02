@@ -24,33 +24,55 @@ OPTIONS:
   --secret-key <SECRET>     AWS Secret Access Key (or use AWS_SECRET_ACCESS_KEY env var)
   --session-token <TOKEN>   AWS Session Token (or use AWS_SESSION_TOKEN env var)
   --profile <PROFILE>       AWS profile name (supports assume role, SSO, etc.)
-  --sign-query              Sign the query string instead of adding Authorization header
-  --output <FORMAT>         Output format: curl|headers|url (default: curl)
+  --expires <SECONDS>       Expiration time for presigned URLs in seconds (default: 3600, max: 604800)
+  --sign-query              Force query string signing (automatically enabled for 'url' output)
+  --output <FORMAT>         Output format: url|curl|headers (default: url)
+                            - url: Presigned URL with query parameters (X-Amz-Algorithm, X-Amz-Credential, etc.)
+                            - curl: Complete curl command with signed headers
+                            - headers: Just the signed headers
   -v, --verbose             Verbose output
   -h, --help               Show this help message
 
 EXAMPLES:
-  # Sign an S3 GET request
+  # Generate presigned URL (default, expires in 1 hour)
   aws4-cli https://my-bucket.s3.amazonaws.com/my-object
 
-  # Sign a DynamoDB request with custom headers
+  # Generate presigned URL with custom expiration (24 hours)
+  aws4-cli --expires 86400 https://my-bucket.s3.amazonaws.com/my-object
+
+  # Get a curl command with signed headers instead
+  aws4-cli --output curl https://my-bucket.s3.amazonaws.com/my-object
+
+  # Sign a DynamoDB request as curl command
   aws4-cli -X POST \\
     -H "Content-Type: application/x-amz-json-1.0" \\
     -H "X-Amz-Target: DynamoDB_20120810.ListTables" \\
     -d '{}' \\
+    --output curl \\
     https://dynamodb.us-east-1.amazonaws.com/
 
-  # Sign with custom credentials
+  # Generate presigned URL with custom credentials
   aws4-cli --access-key AKIAEXAMPLE --secret-key secretexample \\
+    --expires 7200 \\
     https://sqs.us-east-1.amazonaws.com/?Action=ListQueues
 
-  # Sign using AWS profile (supports assume role, SSO, etc.)
-  aws4-cli --profile my-profile \\
+  # Generate presigned URL using AWS profile
+  aws4-cli --profile my-profile --expires 3600 \\
     https://sqs.us-east-1.amazonaws.com/?Action=ListQueues
 
-  # Sign using assume role profile
-  aws4-cli --profile cross-account-role \\
+  # Generate presigned URL using assume role profile
+  aws4-cli --profile cross-account-role --expires 1800 \\
     https://s3.amazonaws.com/my-bucket/
+
+PRESIGNED URL QUERY PARAMETERS:
+  When using 'url' output format, the following query parameters are automatically added:
+  - X-Amz-Algorithm: AWS4-HMAC-SHA256
+  - X-Amz-Credential: <access-key-id>/<date>/<region>/<service>/aws4_request
+  - X-Amz-Date: ISO8601 timestamp
+  - X-Amz-Expires: Expiration time in seconds
+  - X-Amz-SignedHeaders: List of signed headers
+  - X-Amz-Signature: Calculated signature
+  - X-Amz-Security-Token: (if using temporary credentials)
 
 ENVIRONMENT VARIABLES:
   AWS_ACCESS_KEY_ID         AWS Access Key ID
@@ -70,21 +92,26 @@ SUPPORTED CREDENTIAL SOURCES:
   - Command line arguments
 `;
 
+
+const DEFAULT_OPTIONS = {
+  method: 'GET',
+  headers: {},
+  region: process.env.AWS_REGION,
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  sessionToken: process.env.AWS_SESSION_TOKEN,
+  profile: process.env.AWS_PROFILE,
+  expires: 3600, // Default 1 hour
+  signQuery: false,
+  output: 'url',
+  verbose: false
+}
+
+
 class ArgumentParser {
   constructor() {
     this.args = process.argv.slice(2);
-    this.options = {
-      method: 'GET',
-      headers: {},
-      region: process.env.AWS_REGION || 'us-east-1',
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      sessionToken: process.env.AWS_SESSION_TOKEN,
-      profile: process.env.AWS_PROFILE,
-      signQuery: false,
-      output: 'curl',
-      verbose: false
-    };
+    this.options = DEFAULT_OPTIONS;
     this.url = null;
   }
 
@@ -141,12 +168,23 @@ class ArgumentParser {
           this.options.profile = this.args[++i];
           break;
 
+        case '--expires':
+          const expires = parseInt(this.args[++i]);
+          if (isNaN(expires) || expires < 1 || expires > 604800) {
+            throw new Error('--expires must be a number between 1 and 604800 (7 days)');
+          }
+          this.options.expires = expires;
+          break;
+
         case '--sign-query':
           this.options.signQuery = true;
           break;
 
         case '--output':
           this.options.output = this.args[++i];
+          if (!['url', 'curl', 'headers'].includes(this.options.output)) {
+            throw new Error('--output must be one of: url, curl, headers');
+          }
           break;
 
         case '-v':
@@ -156,12 +194,10 @@ class ArgumentParser {
 
         default:
           if (arg.startsWith('-')) {
-            console.error(`Unknown option: ${arg}`);
-            process.exit(1);
+            throw new Error(`Unknown option: ${arg}`);
           } else {
             if (this.url) {
-              console.error('Multiple URLs provided. Only one URL is allowed.');
-              process.exit(1);
+              throw new Error('Multiple URLs provided. Only one URL is allowed.');
             }
             this.url = arg;
           }
@@ -221,42 +257,20 @@ class AWS4CLI {
     // Handle common AWS service patterns
     const parts = hostname.split('.');
 
-    // S3 bucket hostname: bucket.s3.region.amazonaws.com or bucket.s3-region.amazonaws.com
-    if (hostname.includes('.s3.') || hostname.includes('.s3-')) {
-      return 's3';
-    }
-
     // Standard service hostname: service.region.amazonaws.com
     if (parts.length >= 3 && parts[parts.length - 2] === 'amazonaws') {
-      return parts[0];
+      return parts[parts.length - 4];
     }
-
-    // Default fallback
-    return 's3';
+    
+    return null;
   }
 
   extractRegionFromHost(hostname) {
     const parts = hostname.split('.');
 
-    // S3 patterns: bucket.s3.region.amazonaws.com
-    if (hostname.includes('.s3.') && parts.length >= 4) {
-      const regionIndex = parts.findIndex(part => part === 's3') + 1;
-      if (regionIndex < parts.length && parts[regionIndex] !== 'amazonaws') {
-        return parts[regionIndex];
-      }
-    }
-
-    // S3 alternative: bucket.s3-region.amazonaws.com
-    if (hostname.includes('.s3-')) {
-      const s3Part = parts.find(part => part.startsWith('s3-'));
-      if (s3Part) {
-        return s3Part.substring(3); // Remove 's3-' prefix
-      }
-    }
-
     // Standard pattern: service.region.amazonaws.com
     if (parts.length >= 3 && parts[parts.length - 2] === 'amazonaws') {
-      return parts[1];
+      return parts[parts.length - 3];
     }
 
     return null;
@@ -274,8 +288,27 @@ class AWS4CLI {
       }
     }
 
-    if (this.options.signQuery) {
+    // For presigned URLs (url output), always use query string signing
+    if (this.options.output === 'url' || this.options.signQuery) {
       this.requestOptions.signQuery = true;
+    }
+
+    // Add expiration for presigned URLs
+    if (this.requestOptions.signQuery) {
+      // Calculate expiration timestamp
+      const now = new Date();
+      const expirationDate = new Date(now.getTime() + (this.options.expires * 1000));
+      
+      // Add X-Amz-Expires to the URL if not already present
+      const url = new URL(this.url);
+      if (!url.searchParams.has('X-Amz-Expires')) {
+        url.searchParams.set('X-Amz-Expires', this.options.expires.toString());
+        this.requestOptions.path = url.pathname + url.search;
+      }
+      
+      if (this.options.verbose) {
+        console.error(`Presigned URL will expire in ${this.options.expires} seconds (${expirationDate.toISOString()})`);
+      }
     }
   }
 
@@ -329,6 +362,7 @@ class AWS4CLI {
         console.error(`Successfully resolved credentials using AWS SDK`);
         if (credentials.sessionToken) {
           console.error('Using temporary credentials (assumed role or session token)');
+          console.error('Presigned URL will include X-Amz-Security-Token parameter');
         }
       }
 
@@ -380,13 +414,13 @@ class AWS4CLI {
 
   formatOutput(signedOptions) {
     switch (this.options.output) {
+      case 'curl':
+        return this.formatCurl(signedOptions);
       case 'headers':
         return this.formatHeaders(signedOptions);
       case 'url':
-        return this.formatUrl(signedOptions);
-      case 'curl':
       default:
-        return this.formatCurl(signedOptions);
+        return this.formatUrl(signedOptions);
     }
   }
 
@@ -402,7 +436,29 @@ class AWS4CLI {
     const protocol = signedOptions.protocol || 'https:';
     const hostname = signedOptions.hostname || signedOptions.host;
     const path = signedOptions.path || '/';
-    return `${protocol}//${hostname}${path}`;
+    const url = `${protocol}//${hostname}${path}`;
+
+    if (this.options.verbose && this.requestOptions.signQuery) {
+      console.error('Generated presigned URL with query parameters:');
+      const parsedUrl = new URL(url);
+      const queryParams = [
+        'X-Amz-Algorithm',
+        'X-Amz-Credential', 
+        'X-Amz-Date',
+        'X-Amz-Expires',
+        'X-Amz-SignedHeaders',
+        'X-Amz-Security-Token',
+        'X-Amz-Signature'
+      ];
+      
+      queryParams.forEach(param => {
+        if (parsedUrl.searchParams.has(param)) {
+          console.error(`  ${param}: ${parsedUrl.searchParams.get(param)}`);
+        }
+      });
+    }
+    
+    return url;
   }
 
   formatCurl(signedOptions) {
@@ -443,6 +499,11 @@ class AWS4CLI {
       console.error(`Service: ${this.requestOptions.service}`);
       console.error(`Region: ${this.requestOptions.region}`);
       console.error(`Method: ${this.options.method}`);
+      console.error(`Output format: ${this.options.output}`);
+      if (this.requestOptions.signQuery) {
+        console.error(`Generating presigned URL (query string signing enabled)`);
+        console.error(`Expiration: ${this.options.expires} seconds`);
+      }
     }
 
     const signedOptions = await this.sign();
@@ -452,27 +513,47 @@ class AWS4CLI {
   }
 }
 
-// Main execution
-async function main() {
-  const parser = new ArgumentParser();
-  const { url, options } = parser.parse();
 
-  const cli = new AWS4CLI(url, options);
-  await cli.run();
+// Export classes for testing only when in test environment
+if (process.env.NODE_ENV === 'test' || typeof jest !== 'undefined') {
+  global.ArgumentParser = ArgumentParser;
+  global.AWS4CLI = AWS4CLI;
 }
 
-// Handle uncaught errors gracefully
-process.on('uncaughtException', (error) => {
-  console.error(`Error: ${error.message}`);
-  process.exit(1);
-});
+// Main execution
+async function main() {
+  try {
+    const parser = new ArgumentParser();
+    const { url, options } = parser.parse();
 
-process.on('unhandledRejection', (reason) => {
-  console.error(`Error: ${reason}`);
-  process.exit(1);
-});
+    const cli = new AWS4CLI(url, options);
+    await cli.run();
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+}
 
-main().catch((error) => {
-  console.error(`Error: ${error.message}`);
-  process.exit(1);
-}); 
+
+if (process.env.NODE_ENV !== 'test') {
+  main();
+
+    // Handle uncaught errors gracefully
+  process.on('uncaughtException', (error) => {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    console.error(`Error: ${reason}`);
+    process.exit(1);
+  });
+
+} else {
+  // Export classes for testing
+  module.exports = {
+    ArgumentParser,
+    AWS4CLI,
+    DEFAULT_OPTIONS,
+  };
+}
