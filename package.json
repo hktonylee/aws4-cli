@@ -1,0 +1,17 @@
+{
+  "name": "aws4-cli",
+  "version": "0.1.0",
+  "description": "A small CLI utility to sign curl-like URL using Amazon's AWS Signature Version 4",
+  "main": "index.js",
+  "bin": {
+    "aws4-cli": "./index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Tony Lee <iamtonylee@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "aws4": "^1.13.2"
+  }
+}
