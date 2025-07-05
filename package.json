@@ -1,6 +1,6 @@
 {
   "name": "aws4-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A small CLI utility to sign curl-like URL using Amazon's AWS Signature Version 4",
   "main": "index.js",
   "bin": {
