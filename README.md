@@ -267,4 +267,5 @@ MIT License - see the LICENSE file for details.
 
 ## Author
 
-Tony Lee <iamtonylee@gmail.com>
+Tony Lee <hktonylee@proton.me>
+
